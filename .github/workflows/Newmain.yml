@@ -1,0 +1,52 @@
+name: Zyan Cloud PC (AnyDesk)
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Enable RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+      - name: Download AnyDesk
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://download.anydesk.com/AnyDesk.exe" -OutFile AnyDesk.exe -TimeoutSec 180
+          Write-Host "BYTES: $((Get-Item AnyDesk.exe).Length)"
+      - name: Launch AnyDesk and Set Password
+        shell: pwsh
+        run: |
+          Start-Process -FilePath .\AnyDesk.exe
+          Start-Sleep -Seconds 12
+          "Horizons123!" | .\AnyDesk.exe --set-password
+          Start-Sleep -Seconds 3
+          Write-Host "password set"
+      - name: Get AnyDesk ID
+        shell: pwsh
+        run: |
+          $id = $null
+          $proc = Start-Process -FilePath .\AnyDesk.exe -ArgumentList "--get-id" -NoNewWindow -PassThru -RedirectStandardOutput "$env:TEMP\id.txt"
+          if (-not $proc.WaitForExit(15000)) { try { $proc.Kill() } catch {} }
+          $id = (Get-Content "$env:TEMP\id.txt" -ErrorAction SilentlyContinue | Out-String).Trim()
+          Write-Host "cli id: [$id]"
+          if (-not $id) {
+            foreach ($p in @("$env:APPDATA\AnyDesk\ad.trace", "$env:LOCALAPPDATA\AnyDesk\ad.trace")) {
+              if (Test-Path $p) {
+                $m = Get-Content $p | Select-String -Pattern "anydesk\.id\s*=\s*(\d+)" | Select-Object -First 1
+                if (-not $m) { $m = Get-Content $p | Select-String -Pattern "id\s*=\s*(\d{6,12})" | Select-Object -First 1 }
+                if ($m) { $id = $m.Matches[0].Groups[1].Value; break }
+              }
+            }
+          }
+          Write-Host "================================="
+          Write-Host "YOUR ANYDESK ID IS: $id"
+          Write-Host "PASSWORD IS: Horizons123!"
+          Write-Host "================================="
+          if (-not $id) {
+            Write-Host "===== AD.TRACE DUMP ====="
+            foreach ($p in @("$env:APPDATA\AnyDesk\ad.trace", "$env:LOCALAPPDATA\AnyDesk\ad.trace")) { if (Test-Path $p) { Get-Content $p -Tail 30 } }
+            throw "NO ID - trace dumped above"
+          }
+      - name: Keep Alive
+        run: ping -t localhost
