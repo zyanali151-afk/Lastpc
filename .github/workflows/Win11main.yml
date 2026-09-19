@@ -1,0 +1,87 @@
+name: Zyan Cloud PC (Avica + AnyDesk)
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Enable RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+      - name: Create User
+        run: |
+          New-LocalUser -Name "zyan" -Password (ConvertTo-SecureString "Horizons123!" -AsPlainText -Force)
+          Add-LocalGroupMember -Group "Administrators" -Member "zyan"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "zyan"
+          Write-Host "USERNAME: zyan"
+          Write-Host "PASSWORD: Horizons123!"
+      - name: Speed Tune
+        run: |
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          New-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualFX" -Force | Out-Null
+          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualFX" -Name VisualFXSetting -Value 2 -Force
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "Wallpaper" -Value "" -Force
+          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name TaskbarAnimations -Value 0 -Force
+          Write-Host "speed tuned"
+      - name: Install Avica (Scrape URL)
+        shell: pwsh
+        run: |
+          try {
+            $page = Invoke-WebRequest -Uri "https://www.avica.com/downloads/" -UseBasicParsing -TimeoutSec 60
+            $avicaUrl = ($page.Links | Where-Object { $_.href -match "\.exe" } | Select-Object -First 1).href
+            if (-not $avicaUrl) { throw "No .exe found on page" }
+            Write-Host "AVICA URL: $avicaUrl"
+            Invoke-WebRequest -Uri $avicaUrl -OutFile avica.exe -TimeoutSec 180
+            $p = Start-Process .\avica.exe -ArgumentList "/S" -PassThru
+            if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch {} }
+            $avica = $null
+            foreach ($c in @("C:\Program Files\Avica\Avica.exe", "C:\Program Files (x86)\Avica\Avica.exe", "$env:LOCALAPPDATA\Avica\Avica.exe", "$env:LOCALAPPDATA\Programs\Avica\Avica.exe")) { if (Test-Path $c) { $avica = $c; break } }
+            if (-not $avica) { $hit = Get-ChildItem "C:\Program Files", "C:\Program Files (x86)", $env:LOCALAPPDATA -Recurse -Depth 3 -Filter "Avica.exe" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($hit) { $avica = $hit.FullName } }
+            if ($avica) { Start-Process $avica; Write-Host "AVICA LAUNCHED" } else { throw "Avica exe not found after install" }
+          } catch {
+            Write-Host "AVICA SCRAPER FAILED: $_"
+            Write-Host "FALLING BACK TO ANYDESK"
+          }
+      - name: Avica ID Hunt
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 15
+          foreach ($dir in @("$env:APPDATA\Avica", "$env:LOCALAPPDATA\Avica", "C:\ProgramData\Avica")) {
+            if (Test-Path $dir) {
+              Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Length -lt 2MB -and $_.Extension -match 'ini|json|cfg|config|xml|log|dat|txt' } |
+                Select-Object -First 15 |
+                ForEach-Object {
+                  Write-Host "--- $($_.FullName) ---"
+                  Get-Content $_.FullName -ErrorAction SilentlyContinue | Select-String -Pattern '\d{6,12}' | Select-Object -First 8
+                }
+            }
+          }
+      - name: AnyDesk Spare Key
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://download.anydesk.com/AnyDesk.exe" -OutFile AnyDesk.exe -TimeoutSec 180
+          Start-Process -FilePath .\AnyDesk.exe
+          Start-Sleep -Seconds 12
+          "Horizons123!" | .\AnyDesk.exe --set-password
+          Start-Sleep -Seconds 3
+          $id = $null
+          $proc = Start-Process -FilePath .\AnyDesk.exe -ArgumentList "--get-id" -NoNewWindow -PassThru -RedirectStandardOutput "$env:TEMP\id.txt"
+          if (-not $proc.WaitForExit(15000)) { try { $proc.Kill() } catch {} }
+          $id = (Get-Content "$env:TEMP\id.txt" -ErrorAction SilentlyContinue | Out-String).Trim()
+          if (-not $id) {
+            foreach ($p in @("$env:APPDATA\AnyDesk\ad.trace", "$env:LOCALAPPDATA\AnyDesk\ad.trace")) {
+              if (Test-Path $p) {
+                $m = Get-Content $p | Select-String -Pattern "anydesk\.id\s*=\s*(\d+)" | Select-Object -First 1
+                if (-not $m) { $m = Get-Content $p | Select-String -Pattern "id\s*=\s*(\d{6,12})" | Select-Object -First 1 }
+                if ($m) { $id = $m.Matches[0].Groups[1].Value; break }
+              }
+            }
+          }
+          Write-Host "================================="
+          Write-Host "ANYDESK ID: $id"
+          Write-Host "PASSWORD: Horizons123!"
+          Write-Host "================================="
+      - name: Keep Alive
+        run: ping -t localhost
