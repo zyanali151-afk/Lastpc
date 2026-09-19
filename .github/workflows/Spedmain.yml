@@ -1,0 +1,64 @@
+name: Zyan Speed Demon
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Enable RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+      - name: Create User
+        run: |
+          New-LocalUser -Name "zyan" -Password (ConvertTo-SecureString "Horizons123!" -AsPlainText -Force)
+          Add-LocalGroupMember -Group "Administrators" -Member "zyan"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "zyan"
+      - name: Potato Mode (Max Speed)
+        run: |
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -Value 3 -Force
+          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "EnableTransparency" -Value 0 -Force
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "Wallpaper" -Value "" -Force
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "MenuShowDelay" -Value "0" -Force
+          RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters
+          Write-Host "Potato mode engaged. All visual effects killed."
+      - name: Install RustDesk Properly
+        shell: pwsh
+        run: |
+          $rel = Invoke-RestMethod -TimeoutSec 60 https://api.github.com/repos/rustdesk/rustdesk/releases/latest
+          $u = ($rel.assets | Where-Object { $_.name -like "*x86_64.exe" } | Select-Object -First 1).browser_download_url
+          Invoke-WebRequest -TimeoutSec 240 -Uri $u -OutFile rustdesk.exe
+          $p = Start-Process .\rustdesk.exe -ArgumentList "--silent-install" -PassThru
+          if (-not $p.WaitForExit(180000)) { try { $p.Kill() } catch {} }
+          Start-Sleep -Seconds 10
+          $exe = "C:\Program Files\RustDesk\rustdesk.exe"
+          if (-not (Test-Path $exe)) { $exe = (Resolve-Path .\rustdesk.exe).Path }
+          & $exe --password Horizons123!
+          Start-Sleep -Seconds 3
+          if (Get-Service RustDesk -ErrorAction SilentlyContinue) { Restart-Service RustDesk -Force; Start-Sleep -Seconds 5 }
+          Start-Process $exe
+          $id = ""
+          for ($i = 1; $i -le 6; $i++) {
+            $id = (& $exe --get-id 2>$null | Out-String).Trim()
+            if ($id) { break }
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "================================="
+          Write-Host "YOUR RUSTDESK ID IS: $id"
+          Write-Host "PASSWORD IS: Horizons123!"
+          Write-Host "================================="
+          if (-not $id) { throw "NO ID" }
+      - name: Zombie Doctor Keep Alive
+        shell: pwsh
+        run: |
+          while ($true) {
+            $alive = Get-Process -Name "rustdesk" -ErrorAction SilentlyContinue
+            if (-not $alive) {
+              Write-Host "RustDesk died! Respawning..."
+              $exe = "C:\Program Files\RustDesk\rustdesk.exe"
+              if (-not (Test-Path $exe)) { $exe = (Resolve-Path .\rustdesk.exe).Path }
+              Start-Process $exe
+            }
+            Start-Sleep -Seconds 120
+          }
